@@ -21,6 +21,7 @@ from local_groundingdino.util.slconfig import SLConfig as local_groundingdino_SL
 from local_groundingdino.models import build_model as local_groundingdino_build_model
 import glob
 import folder_paths
+import cv2
 
 logger = logging.getLogger('comfyui_segment_anything')
 
@@ -306,34 +307,53 @@ class GroundingDinoSAMSegment:
         }
     CATEGORY = "segment_anything"
     FUNCTION = "main"
-    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
+    RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
     def main(self, grounding_dino_model, sam_model, image, prompt, threshold):
         res_images = []
         res_masks = []
+        bbox_images = []
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         for item in image:
-            item = Image.fromarray(
-                np.clip(255. * item.cpu().numpy(), 0, 255).astype(np.uint8)).convert('RGBA')
+            item_np = (item.cpu().numpy() * 255).astype(np.uint8)
+            item_pil = Image.fromarray(item_np).convert('RGBA')
+            
             boxes = groundingdino_predict(
                 grounding_dino_model,
-                item,
+                item_pil,
                 prompt,
                 threshold
             )
+            
+            # Create bbox image
+            bbox_image = item_np.copy()
+            for box in boxes:
+                x1, y1, x2, y2 = box.int().tolist()
+                cv2.rectangle(bbox_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            
+            bbox_images.append(torch.from_numpy(bbox_image).float().div(255.0).unsqueeze(0).to(device))
+
             if boxes.shape[0] == 0:
-                break
+                continue
+
             (images, masks) = sam_segment(
                 sam_model,
-                item,
+                item_pil,
                 boxes
             )
             res_images.extend(images)
             res_masks.extend(masks)
+
         if len(res_images) == 0:
             _, height, width, _ = image.size()
-            empty_mask = torch.zeros((1, height, width), dtype=torch.uint8, device="cpu")
-            return (empty_mask, empty_mask)
-        return (torch.cat(res_images, dim=0), torch.cat(res_masks, dim=0))
+            empty_mask = torch.zeros((1, height, width), dtype=torch.float32, device=device)
+            return (empty_mask, empty_mask, torch.cat(bbox_images, dim=0))
+
+        return (torch.cat(res_images, dim=0).to(device), 
+                torch.cat(res_masks, dim=0).to(device), 
+                torch.cat(bbox_images, dim=0))
 
 
 class InvertMask:
