@@ -258,7 +258,8 @@ def sam_segment(
     stability_scores = calculate_stability_score(masks, low_res_masks, predictor.model.mask_threshold)
     
     # Filter masks based on stability score
-    stable_masks = masks[stability_scores > stability_score_threshold]
+    stable_mask_indices = torch.where(stability_scores > stability_score_threshold)[0]
+    stable_masks = masks[stable_mask_indices]
     
     if stable_masks.shape[0] == 0:
         return None
