@@ -309,6 +309,12 @@ class GroundingDinoSAMSegment:
                     "max": 100.0,
                     "step": 0.1
                 }),
+                "max_detections": ("INT", {
+                    "default": 100,
+                    "min": 1,
+                    "max": 1000,
+                    "step": 1
+                }),
             }
         }
     CATEGORY = "segment_anything"
@@ -316,7 +322,7 @@ class GroundingDinoSAMSegment:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
     RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
-    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage):
+    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage, max_detections):
         res_images = []
         res_masks = []
         bbox_images = []
@@ -333,7 +339,7 @@ class GroundingDinoSAMSegment:
                 threshold
             )
             
-            # Filter boxes based on max_area_percentage
+            # Filter boxes based on max_area_percentage and max_detections
             image_area = item_pil.width * item_pil.height
             max_box_area = image_area * (max_area_percentage / 100.0)
             filtered_boxes = []
@@ -343,6 +349,8 @@ class GroundingDinoSAMSegment:
                 box_area = (x2 - x1) * (y2 - y1)
                 if box_area <= max_box_area:
                     filtered_boxes.append(box)
+                if len(filtered_boxes) >= max_detections:
+                    break
             
             filtered_boxes = torch.stack(filtered_boxes) if filtered_boxes else torch.zeros((0, 4))
             
