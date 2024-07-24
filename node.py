@@ -230,12 +230,12 @@ def split_image_mask(image):
 def sam_segment(
     sam_model,
     image,
-    boxes
+    boxes,
+    stability_score_threshold
 ):
     if boxes.shape[0] == 0:
         return None
     sam_is_hq = False
-    # TODO: more elegant
     if hasattr(sam_model, 'model_name') and 'hq' in sam_model.model_name:
         sam_is_hq = True
     predictor = SamPredictorHQ(sam_model, sam_is_hq)
@@ -245,13 +245,34 @@ def sam_segment(
     transformed_boxes = predictor.transform.apply_boxes_torch(
         boxes, image_np.shape[:2])
     sam_device = comfy.model_management.get_torch_device()
-    masks, _, _ = predictor.predict_torch(
+    masks, iou_predictions, low_res_masks = predictor.predict_torch(
         point_coords=None,
         point_labels=None,
         boxes=transformed_boxes.to(sam_device),
-        multimask_output=False)
-    masks = masks.permute(1, 0, 2, 3).cpu().numpy()
-    return create_tensor_output(image_np, masks, boxes)
+        multimask_output=True,
+        return_logits=True
+    )
+
+    # Calculate stability score
+    stability_scores = calculate_stability_score(masks, low_res_masks, predictor.model.mask_threshold)
+    
+    # Filter masks based on stability score
+    stable_masks = masks[stability_scores > stability_score_threshold]
+    
+    if stable_masks.shape[0] == 0:
+        return None
+
+    return create_tensor_output(image_np, stable_masks, boxes)
+
+def calculate_stability_score(masks, low_res_masks, mask_threshold):
+    # Implementation of stability score calculation
+    # This is a simplified version and may need to be adjusted based on your specific requirements
+    low_res_masks = low_res_masks.float()
+    binary_masks = (masks > mask_threshold).float()
+    intersection = (binary_masks * low_res_masks).sum((1, 2))
+    union = (binary_masks + low_res_masks).clamp(0, 1).sum((1, 2))
+    stability_scores = intersection / union
+    return stability_scores
 
 
 class SAMModelLoader:
@@ -315,6 +336,12 @@ class GroundingDinoSAMSegment:
                     "max": 1000,
                     "step": 1
                 }),
+                "stability_score_threshold": ("FLOAT", {
+                    "default": 0.95,
+                    "min": 0,
+                    "max": 1.0,
+                    "step": 0.01
+                }),
             }
         }
     CATEGORY = "segment_anything"
@@ -322,7 +349,7 @@ class GroundingDinoSAMSegment:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
     RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
-    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage, max_detections):
+    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage, max_detections, stability_score_threshold):
         res_images = []
         res_masks = []
         bbox_images = []
@@ -368,7 +395,8 @@ class GroundingDinoSAMSegment:
             (images, masks) = sam_segment(
                 sam_model,
                 item_pil,
-                filtered_boxes
+                filtered_boxes,
+                stability_score_threshold
             )
             res_images.extend(images)
             res_masks.extend(masks)
