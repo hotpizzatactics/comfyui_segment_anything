@@ -231,8 +231,7 @@ def split_image_mask(image):
 def sam_segment(
     sam_model,
     image,
-    boxes,
-    stability_score_threshold
+    boxes
 ):
     if boxes.shape[0] == 0:
         return None
@@ -246,38 +245,41 @@ def sam_segment(
     transformed_boxes = predictor.transform.apply_boxes_torch(
         boxes, image_np.shape[:2])
     sam_device = comfy.model_management.get_torch_device()
-    masks, iou_predictions, low_res_masks = predictor.predict_torch(
-        point_coords=None,
-        point_labels=None,
-        boxes=transformed_boxes.to(sam_device),
-        multimask_output=True,
-        return_logits=True
-    )
-
-    # Calculate stability score
-    stability_scores = calculate_stability_score(masks, low_res_masks, predictor.model.mask_threshold)
     
-    # Filter masks based on stability score
-    stable_mask_indices = torch.where(stability_scores > stability_score_threshold)[0]
-    stable_masks = masks[stable_mask_indices]
+    all_masks = []
+    for box in transformed_boxes:
+        masks, _, _ = predictor.predict_torch(
+            point_coords=None,
+            point_labels=None,
+            boxes=box.unsqueeze(0).to(sam_device),
+            multimask_output=True,
+            return_logits=False
+        )
+        
+        # Select the mask with the highest contrast within the bounding box
+        box_int = box.int()
+        cropped_image = image_np_rgb[box_int[1]:box_int[3], box_int[0]:box_int[2]]
+        best_mask = None
+        best_contrast = -1
+        
+        for mask in masks:
+            cropped_mask = mask[0, box_int[1]:box_int[3], box_int[0]:box_int[2]]
+            masked_image = cropped_image * cropped_mask.cpu().numpy()[:, :, None]
+            contrast = np.std(masked_image)
+            
+            if contrast > best_contrast:
+                best_contrast = contrast
+                best_mask = mask
+        
+        if best_mask is not None:
+            all_masks.append(best_mask)
     
-    if stable_masks.shape[0] == 0:
+    if len(all_masks) == 0:
         return None
-
-    return create_tensor_output(image_np, stable_masks, boxes)
-
-
-def calculate_stability_score(masks, low_res_masks, mask_threshold):
-    # Ensure masks and low_res_masks have the same spatial dimensions
-    if masks.shape[-2:] != low_res_masks.shape[-2:]:
-        low_res_masks = F.interpolate(low_res_masks, size=masks.shape[-2:], mode='bilinear', align_corners=False)
     
-    low_res_masks = low_res_masks.float()
-    binary_masks = (masks > mask_threshold).float()
-    intersection = (binary_masks * low_res_masks).sum((1, 2))
-    union = (binary_masks + low_res_masks).clamp(0, 1).sum((1, 2))
-    stability_scores = intersection / union
-    return stability_scores
+    final_masks = torch.cat(all_masks, dim=0)
+    return create_tensor_output(image_np, final_masks, boxes)
+
 
 
 class SAMModelLoader:
