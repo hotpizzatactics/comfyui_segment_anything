@@ -206,25 +206,27 @@ def create_pil_output(image_np, masks, boxes_filt):
 def create_tensor_output(image_np, masks, boxes_filt):
     output_masks, output_images = [], []
     boxes_filt = boxes_filt.numpy().astype(int) if boxes_filt is not None else None
+    image_tensor = torch.from_numpy(image_np).float() / 255.0
+    
     for mask in masks:
-        image_np_copy = copy.deepcopy(image_np)
-        image_np_copy[~np.any(mask, axis=0)] = np.array([0, 0, 0, 0])
-        output_image, output_mask = split_image_mask(
-            Image.fromarray(image_np_copy))
+        image_copy = image_tensor.clone()
+        mask_expanded = mask.unsqueeze(-1).expand(-1, -1, 4)
+        image_copy[~mask_expanded.any(dim=0)] = torch.tensor([0, 0, 0, 0])
+        
+        output_image, output_mask = split_image_mask(Image.fromarray((image_copy.numpy() * 255).astype(np.uint8)))
         output_masks.append(output_mask)
         output_images.append(output_image)
+    
     return (output_images, output_masks)
 
 
 def split_image_mask(image):
     image_rgb = image.convert("RGB")
-    image_rgb = np.array(image_rgb).astype(np.float32) / 255.0
-    image_rgb = torch.from_numpy(image_rgb)[None,]
+    image_rgb = torch.from_numpy(np.array(image_rgb).astype(np.float32) / 255.0)[None,]
     if 'A' in image.getbands():
-        mask = np.array(image.getchannel('A')).astype(np.float32) / 255.0
-        mask = torch.from_numpy(mask)[None,]
+        mask = torch.from_numpy(np.array(image.getchannel('A')).astype(np.float32) / 255.0)[None,]
     else:
-        mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
+        mask = torch.zeros((1, image_rgb.shape[2], image_rgb.shape[3]), dtype=torch.float32)
     return (image_rgb, mask)
 
 
