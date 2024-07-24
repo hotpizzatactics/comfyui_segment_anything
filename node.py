@@ -303,6 +303,12 @@ class GroundingDinoSAMSegment:
                     "max": 1.0,
                     "step": 0.01
                 }),
+                "max_area_percentage": ("FLOAT", {
+                    "default": 100.0,
+                    "min": 0,
+                    "max": 100.0,
+                    "step": 0.1
+                }),
             }
         }
     CATEGORY = "segment_anything"
@@ -310,7 +316,7 @@ class GroundingDinoSAMSegment:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
     RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
-    def main(self, grounding_dino_model, sam_model, image, prompt, threshold):
+    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage):
         res_images = []
         res_masks = []
         bbox_images = []
@@ -327,21 +333,34 @@ class GroundingDinoSAMSegment:
                 threshold
             )
             
+            # Filter boxes based on max_area_percentage
+            image_area = item_pil.width * item_pil.height
+            max_box_area = image_area * (max_area_percentage / 100.0)
+            filtered_boxes = []
+            
+            for box in boxes:
+                x1, y1, x2, y2 = box.int().tolist()
+                box_area = (x2 - x1) * (y2 - y1)
+                if box_area <= max_box_area:
+                    filtered_boxes.append(box)
+            
+            filtered_boxes = torch.stack(filtered_boxes) if filtered_boxes else torch.zeros((0, 4))
+            
             # Create bbox image
             bbox_image = item_np.copy()
-            for box in boxes:
+            for box in filtered_boxes:
                 x1, y1, x2, y2 = box.int().tolist()
                 cv2.rectangle(bbox_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
             
             bbox_images.append(torch.from_numpy(bbox_image).float().div(255.0).unsqueeze(0).to(device))
 
-            if boxes.shape[0] == 0:
+            if filtered_boxes.shape[0] == 0:
                 continue
 
             (images, masks) = sam_segment(
                 sam_model,
                 item_pil,
-                boxes
+                filtered_boxes
             )
             res_images.extend(images)
             res_masks.extend(masks)
