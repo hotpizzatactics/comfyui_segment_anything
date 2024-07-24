@@ -22,6 +22,7 @@ from local_groundingdino.models import build_model as local_groundingdino_build_
 import glob
 import folder_paths
 import cv2
+import torch.nn.functional as F
 
 logger = logging.getLogger('comfyui_segment_anything')
 
@@ -265,8 +266,10 @@ def sam_segment(
     return create_tensor_output(image_np, stable_masks, boxes)
 
 def calculate_stability_score(masks, low_res_masks, mask_threshold):
-    # Implementation of stability score calculation
-    # This is a simplified version and may need to be adjusted based on your specific requirements
+    # Ensure masks and low_res_masks have the same spatial dimensions
+    if masks.shape[-2:] != low_res_masks.shape[-2:]:
+        low_res_masks = F.interpolate(low_res_masks, size=masks.shape[-2:], mode='bilinear', align_corners=False)
+    
     low_res_masks = low_res_masks.float()
     binary_masks = (masks > mask_threshold).float()
     intersection = (binary_masks * low_res_masks).sum((1, 2))
