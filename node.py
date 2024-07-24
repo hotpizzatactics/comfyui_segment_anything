@@ -266,6 +266,7 @@ def sam_segment(
 
     return create_tensor_output(image_np, stable_masks, boxes)
 
+
 def calculate_stability_score(masks, low_res_masks, mask_threshold):
     # Ensure masks and low_res_masks have the same spatial dimensions
     if masks.shape[-2:] != low_res_masks.shape[-2:]:
@@ -340,12 +341,6 @@ class GroundingDinoSAMSegment:
                     "max": 1000,
                     "step": 1
                 }),
-                "stability_score_threshold": ("FLOAT", {
-                    "default": 0.95,
-                    "min": 0,
-                    "max": 1.0,
-                    "step": 0.01
-                }),
             }
         }
     CATEGORY = "segment_anything"
@@ -353,7 +348,7 @@ class GroundingDinoSAMSegment:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
     RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
-    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage, max_detections, stability_score_threshold):
+    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage, max_detections):
         res_images = []
         res_masks = []
         bbox_images = []
@@ -399,8 +394,7 @@ class GroundingDinoSAMSegment:
             result = sam_segment(
                 sam_model,
                 item_pil,
-                filtered_boxes,
-                stability_score_threshold
+                filtered_boxes
             )
             
             if result is not None:
