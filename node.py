@@ -396,14 +396,17 @@ class GroundingDinoSAMSegment:
             if filtered_boxes.shape[0] == 0:
                 continue
 
-            (images, masks) = sam_segment(
+            result = sam_segment(
                 sam_model,
                 item_pil,
                 filtered_boxes,
                 stability_score_threshold
             )
-            res_images.extend(images)
-            res_masks.extend(masks)
+            
+            if result is not None:
+                images, masks = result
+                res_images.extend(images)
+                res_masks.extend(masks)
 
         if len(res_images) == 0:
             _, height, width, _ = image.size()
