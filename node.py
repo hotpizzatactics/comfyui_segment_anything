@@ -294,7 +294,8 @@ class GroundingDinoSAMSegment:
             "required": {
                 "sam_model": ('SAM_MODEL', {}),
                 "grounding_dino_model": ('GROUNDING_DINO_MODEL', {}),
-                "image": ('IMAGE', {}),
+                "detection_image": ('IMAGE', {}),
+                "segmentation_image": ('IMAGE', {}),
                 "prompt": ("STRING", {}),
                 "threshold": ("FLOAT", {
                     "default": 0.3,
@@ -321,25 +322,31 @@ class GroundingDinoSAMSegment:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
     RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
-    def main(self, grounding_dino_model, sam_model, image, prompt, threshold, max_area_percentage, max_detections):
+    def main(self, grounding_dino_model, sam_model, detection_image, segmentation_image, prompt, threshold, max_area_percentage, max_detections):
         res_images = []
         res_masks = []
         bbox_images = []
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        for item in image:
-            item_np = (item.cpu().numpy() * 255).astype(np.uint8)
-            item_pil = Image.fromarray(item_np).convert('RGBA')
+        # Ensure detection_image and segmentation_image have the same dimensions
+        assert detection_image.shape == segmentation_image.shape, "Detection and segmentation images must have the same dimensions"
+
+        for det_item, seg_item in zip(detection_image, segmentation_image):
+            det_item_np = (det_item.cpu().numpy() * 255).astype(np.uint8)
+            det_item_pil = Image.fromarray(det_item_np).convert('RGBA')
+            
+            seg_item_np = (seg_item.cpu().numpy() * 255).astype(np.uint8)
+            seg_item_pil = Image.fromarray(seg_item_np).convert('RGBA')
             
             boxes = groundingdino_predict(
                 grounding_dino_model,
-                item_pil,
+                det_item_pil,
                 prompt,
                 threshold
             )
             
             # Filter boxes based on max_area_percentage and max_detections
-            image_area = item_pil.width * item_pil.height
+            image_area = det_item_pil.width * det_item_pil.height
             max_box_area = image_area * (max_area_percentage / 100.0)
             filtered_boxes = []
             
@@ -353,8 +360,8 @@ class GroundingDinoSAMSegment:
             
             filtered_boxes = torch.stack(filtered_boxes) if filtered_boxes else torch.zeros((0, 4))
             
-            # Create bbox image
-            bbox_image = item_np.copy()
+            # Create bbox image using detection image
+            bbox_image = det_item_np.copy()
             for box in filtered_boxes:
                 x1, y1, x2, y2 = box.int().tolist()
                 cv2.rectangle(bbox_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -364,9 +371,10 @@ class GroundingDinoSAMSegment:
             if filtered_boxes.shape[0] == 0:
                 continue
 
+            # Use segmentation image for SAM
             result = sam_segment(
                 sam_model,
-                item_pil,
+                seg_item_pil,
                 filtered_boxes
             )
             
@@ -376,7 +384,7 @@ class GroundingDinoSAMSegment:
                 res_masks.extend(masks)
 
         if len(res_images) == 0:
-            _, height, width, _ = image.size()
+            _, height, width, _ = segmentation_image.size()
             empty_mask = torch.zeros((1, height, width), dtype=torch.float32, device=device)
             return (empty_mask, empty_mask, torch.cat(bbox_images, dim=0))
 
