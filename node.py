@@ -247,40 +247,13 @@ def sam_segment(
     transformed_boxes = predictor.transform.apply_boxes_torch(
         boxes, image_np.shape[:2])
     sam_device = comfy.model_management.get_torch_device()
-    
-    all_masks = []
-    for box in transformed_boxes:
-        masks, _, _ = predictor.predict_torch(
-            point_coords=None,
-            point_labels=None,
-            boxes=box.unsqueeze(0).to(sam_device),
-            multimask_output=True,
-            return_logits=False
-        )
-        
-        # Select the mask with the highest contrast within the bounding box
-        box_int = box.int()
-        cropped_image = image_np_rgb[box_int[1]:box_int[3], box_int[0]:box_int[2]]
-        best_mask = None
-        best_contrast = -1
-        
-        for mask in masks:
-            cropped_mask = mask[0, box_int[1]:box_int[3], box_int[0]:box_int[2]]
-            masked_image = cropped_image * cropped_mask.cpu().numpy()[:, :, None]
-            contrast = np.std(masked_image)
-            
-            if contrast > best_contrast:
-                best_contrast = contrast
-                best_mask = mask
-        
-        if best_mask is not None:
-            all_masks.append(best_mask)
-    
-    if len(all_masks) == 0:
-        return None
-    
-    final_masks = torch.cat(all_masks, dim=0)
-    return create_tensor_output(image_np, final_masks, boxes)
+    masks, _, _ = predictor.predict_torch(
+        point_coords=None,
+        point_labels=None,
+        boxes=transformed_boxes.to(sam_device),
+        multimask_output=False)
+    masks = masks.permute(1, 0, 2, 3).cpu().numpy()
+    return create_tensor_output(image_np, masks, boxes)
 
 
 
