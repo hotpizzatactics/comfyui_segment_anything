@@ -206,27 +206,25 @@ def create_pil_output(image_np, masks, boxes_filt):
 def create_tensor_output(image_np, masks, boxes_filt):
     output_masks, output_images = [], []
     boxes_filt = boxes_filt.numpy().astype(int) if boxes_filt is not None else None
-    image_tensor = torch.from_numpy(image_np).float() / 255.0
-    
     for mask in masks:
-        image_copy = image_tensor.clone()
-        mask_expanded = mask.unsqueeze(-1).expand(-1, -1, 4)
-        image_copy[~mask_expanded.any(dim=0)] = torch.tensor([0, 0, 0, 0])
-        
-        output_image, output_mask = split_image_mask(Image.fromarray((image_copy.numpy() * 255).astype(np.uint8)))
+        image_np_copy = copy.deepcopy(image_np)
+        image_np_copy[~np.any(mask, axis=0)] = np.array([0, 0, 0, 0])
+        output_image, output_mask = split_image_mask(
+            Image.fromarray(image_np_copy))
         output_masks.append(output_mask)
         output_images.append(output_image)
-    
     return (output_images, output_masks)
 
 
 def split_image_mask(image):
     image_rgb = image.convert("RGB")
-    image_rgb = torch.from_numpy(np.array(image_rgb).astype(np.float32) / 255.0)[None,]
+    image_rgb = np.array(image_rgb).astype(np.float32) / 255.0
+    image_rgb = torch.from_numpy(image_rgb)[None,]
     if 'A' in image.getbands():
-        mask = torch.from_numpy(np.array(image.getchannel('A')).astype(np.float32) / 255.0)[None,]
+        mask = np.array(image.getchannel('A')).astype(np.float32) / 255.0
+        mask = torch.from_numpy(mask)[None,]
     else:
-        mask = torch.zeros((1, image_rgb.shape[2], image_rgb.shape[3]), dtype=torch.float32)
+        mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
     return (image_rgb, mask)
 
 
@@ -238,6 +236,7 @@ def sam_segment(
     if boxes.shape[0] == 0:
         return None
     sam_is_hq = False
+    # TODO: more elegant
     if hasattr(sam_model, 'model_name') and 'hq' in sam_model.model_name:
         sam_is_hq = True
     predictor = SamPredictorHQ(sam_model, sam_is_hq)
@@ -254,9 +253,6 @@ def sam_segment(
         multimask_output=False)
     masks = masks.permute(1, 0, 2, 3).cpu().numpy()
     return create_tensor_output(image_np, masks, boxes)
-
-
-
 class SAMModelLoader:
     @classmethod
     def INPUT_TYPES(cls):
