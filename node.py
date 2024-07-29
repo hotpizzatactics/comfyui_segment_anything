@@ -319,8 +319,8 @@ class GroundingDinoSAMSegment:
         }
     CATEGORY = "segment_anything"
     FUNCTION = "main"
-    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
-    RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "BBOX")
+    RETURN_NAMES = ("segmented_image", "mask", "bbox_image", "bbox")
 
     def main(self, grounding_dino_model, sam_model, detection_image, segmentation_image, prompt, threshold, max_area_percentage, max_detections):
         res_images = []
@@ -386,11 +386,13 @@ class GroundingDinoSAMSegment:
         if len(res_images) == 0:
             _, height, width, _ = segmentation_image.size()
             empty_mask = torch.zeros((1, height, width), dtype=torch.float32, device=device)
-            return (empty_mask, empty_mask, torch.cat(bbox_images, dim=0))
+            empty_bbox = torch.zeros((0, 4), dtype=torch.float32, device=device)
+            return (empty_mask, empty_mask, torch.cat(bbox_images, dim=0), empty_bbox)
 
         return (torch.cat(res_images, dim=0).to(device), 
                 torch.cat(res_masks, dim=0).to(device), 
-                torch.cat(bbox_images, dim=0))
+                torch.cat(bbox_images, dim=0),
+                filtered_boxes.to(device))
 
 
 class InvertMask:
@@ -425,3 +427,85 @@ class IsMaskEmptyNode:
 
     def main(self, mask):
         return (torch.all(mask == 0).int().item(), )
+
+class IsMaskAreaGreaterThan:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mask": ("MASK",),
+                "threshold": ("FLOAT", {
+                    "default": 0.5,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01
+                }),
+            },
+        }
+    RETURN_TYPES = ["NUMBER"]
+    RETURN_NAMES = ["boolean_number"]
+
+    FUNCTION = "main"
+    CATEGORY = "segment_anything"
+
+    def main(self, mask, threshold):
+        total_pixels = mask.numel()
+        white_pixels = torch.sum(mask > 0.5)
+        area_percentage = white_pixels.float() / total_pixels
+        return (int(area_percentage > threshold),)
+
+class SetMaskToBlack:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+            },
+        }
+    RETURN_TYPES = ["IMAGE"]
+
+    FUNCTION = "main"
+    CATEGORY = "segment_anything"
+
+    def main(self, image, mask):
+        # Ensure mask has the same spatial dimensions as the image
+        mask = F.interpolate(mask.unsqueeze(1), size=image.shape[2:], mode='nearest')
+        mask = mask.squeeze(1).unsqueeze(-1)  # Add channel dimension to match image
+
+        # Create a black image with the same shape as the input image
+        black = torch.zeros_like(image)
+
+        # Use the mask to blend between the original image and the black image
+        result = torch.where(mask > 0.5, image, black)
+
+        return (result,)
+
+class BoundMaskToBBox:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "bbox": ("BBOX",),  # This should be the bbox output from GroundingDinoSAMSegment
+            },
+        }
+    RETURN_TYPES = ["IMAGE"]
+
+    FUNCTION = "main"
+    CATEGORY = "segment_anything"
+
+    def main(self, image, mask, bbox):
+        # Create a new mask with the same shape as the input mask
+        new_mask = torch.zeros_like(mask)
+
+        for box in bbox:
+            x1, y1, x2, y2 = box.int().tolist()
+            new_mask[:, y1:y2, x1:x2] = mask[:, y1:y2, x1:x2]
+
+        # Apply the new mask to the image
+        new_mask = new_mask.unsqueeze(-1)  # Add channel dimension to match image
+        result = torch.where(new_mask > 0.5, image, torch.zeros_like(image))
+
+        return (result,)
