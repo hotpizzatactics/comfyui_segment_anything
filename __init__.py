@@ -9,7 +9,7 @@ NODE_CLASS_MAPPINGS = {
     "IsMaskEmpty": IsMaskEmptyNode,
     "IsMaskAreaGreaterThan": IsMaskAreaGreaterThan,
     "SetMaskToBlack": SetMaskToBlack,
-    "BoundMaskToBBox": BoundMaskToBBox,
+
 }
 
 __all__ = ['NODE_CLASS_MAPPINGS']
