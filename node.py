@@ -315,15 +315,15 @@ class GroundingDinoSAMSegment:
                     "max": 1000,
                     "step": 1
                 }),
-                "bound_seg_to_bbox": ("BOOLEAN", {"default": False}),  # New toggle
+                "bound_to_bbox": ("BOOLEAN", {"default": False}),  # New toggle
             }
         }
     CATEGORY = "segment_anything"
     FUNCTION = "main"
-    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "BBOX")
-    RETURN_NAMES = ("segmented_image", "mask", "bbox_image", "bbox")
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
+    RETURN_NAMES = ("segmented_image", "mask", "bbox_image")
 
-    def main(self, grounding_dino_model, sam_model, detection_image, segmentation_image, prompt, threshold, max_area_percentage, max_detections, bound_seg_to_bbox):
+    def main(self, grounding_dino_model, sam_model, detection_image, segmentation_image, prompt, threshold, max_area_percentage, max_detections, bound_to_bbox):
         res_images = []
         res_masks = []
         bbox_images = []
@@ -387,30 +387,22 @@ class GroundingDinoSAMSegment:
         if len(res_images) == 0:
             _, height, width, _ = segmentation_image.size()
             empty_mask = torch.zeros((1, height, width), dtype=torch.float32, device=device)
-            empty_bbox = torch.zeros((0, 4), dtype=torch.float32, device=device)
-            return (empty_mask, empty_mask, torch.cat(bbox_images, dim=0), empty_bbox)
+            return (empty_mask, empty_mask, torch.cat(bbox_images, dim=0))
 
-        if bound_seg_to_bbox:
-            # Create a new mask bounded by the bounding boxes
-            bounded_mask = torch.zeros_like(torch.cat(res_masks, dim=0))
-            for i, box in enumerate(filtered_boxes):
-                x1, y1, x2, y2 = box.int().tolist()
-                bounded_mask[i, y1:y2, x1:x2] = res_masks[i][y1:y2, x1:x2]
-            
-            # Apply the bounded mask to the segmented images
-            bounded_images = torch.where(bounded_mask.unsqueeze(-1) > 0.5, 
-                                         torch.cat(res_images, dim=0), 
-                                         torch.zeros_like(torch.cat(res_images, dim=0)))
-            
-            return (bounded_images.to(device),
-                    bounded_mask.to(device),
-                    torch.cat(bbox_images, dim=0),
-                    filtered_boxes.to(device))
-        else:
-            return (torch.cat(res_images, dim=0).to(device), 
-                    torch.cat(res_masks, dim=0).to(device), 
-                    torch.cat(bbox_images, dim=0),
-                    filtered_boxes.to(device))
+        # Apply bounding if toggle is on and bboxes were detected
+        if bound_to_bbox and filtered_boxes.shape[0] > 0:
+            for i in range(len(res_masks)):
+                mask = res_masks[i]
+                for box in filtered_boxes:
+                    x1, y1, x2, y2 = box.int().tolist()
+                    mask_outside_box = torch.ones_like(mask)
+                    mask_outside_box[:, y1:y2, x1:x2] = 0
+                    res_masks[i] = torch.where(mask_outside_box == 1, torch.zeros_like(mask), mask)
+                res_images[i] = torch.where(res_masks[i].unsqueeze(-1) > 0.5, res_images[i], torch.zeros_like(res_images[i]))
+
+        return (torch.cat(res_images, dim=0).to(device), 
+                torch.cat(res_masks, dim=0).to(device), 
+                torch.cat(bbox_images, dim=0))
 
 
 class InvertMask:
@@ -496,40 +488,5 @@ class SetMaskToBlack:
 
         # Use the mask to blend between the original image and the black image
         result = torch.where(mask > 0.5, image, black)
-
-        return (result,)
-
-class BoundSegmentationToBBox:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "segmented_image": ("IMAGE",),
-                "mask": ("MASK",),
-                "bbox": ("BBOX",),
-            },
-        }
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("bounded_segmentation",)
-    FUNCTION = "bound_segmentation"
-    CATEGORY = "segment_anything"
-
-    def bound_segmentation(self, segmented_image, mask, bbox):
-        device = segmented_image.device
-        result = torch.zeros_like(segmented_image)
-
-        for box in bbox:
-            x1, y1, x2, y2 = box.int().tolist()
-            
-            # Crop the segmented image and mask to the bounding box
-            cropped_segment = segmented_image[:, :, y1:y2, x1:x2]
-            cropped_mask = mask[:, y1:y2, x1:x2]
-            
-            # Apply the cropped mask to the cropped segment
-            cropped_mask = cropped_mask.unsqueeze(1).expand_as(cropped_segment)
-            masked_segment = torch.where(cropped_mask > 0.5, cropped_segment, torch.zeros_like(cropped_segment))
-            
-            # Place the masked segment back into the result image
-            result[:, :, y1:y2, x1:x2] = masked_segment
 
         return (result,)
